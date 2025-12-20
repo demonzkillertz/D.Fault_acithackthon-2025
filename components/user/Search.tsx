@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, StatusBar, ScrollView, TextInput } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, StatusBar, ScrollView, TextInput, KeyboardAvoidingView, Platform } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 
 // Add the onBack prop to the component interface
@@ -10,6 +11,7 @@ interface SearchScreenProps {
 }
 
 export default function Search({ onBack, activeTab = 'search', onNavigate }: SearchScreenProps) {
+  const insets = useSafeAreaInsets();
   const [currentTime, setCurrentTime] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearchFocused, setIsSearchFocused] = useState(false);
@@ -101,7 +103,10 @@ export default function Search({ onBack, activeTab = 'search', onNavigate }: Sea
   ];
 
   return (
-    <View style={styles.container}>
+    <KeyboardAvoidingView 
+      style={[styles.container, { paddingBottom: insets.bottom + 80 }]}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    >
       <StatusBar barStyle="dark-content" backgroundColor="#fff" />
       
       {/* Status Bar */}
@@ -171,7 +176,11 @@ export default function Search({ onBack, activeTab = 'search', onNavigate }: Sea
         </View>
       </View>
 
-      <ScrollView style={styles.scrollContainer} showsVerticalScrollIndicator={false}>
+      <ScrollView 
+        style={styles.scrollContainer} 
+        contentContainerStyle={{ paddingBottom: 100 }}
+        showsVerticalScrollIndicator={false}
+      >
         {/* Recent Searches Section */}
         <View style={styles.recentSearchesContainer}>
           <Text style={styles.recentSearchesTitle}>Recent searches:</Text>
@@ -288,7 +297,7 @@ export default function Search({ onBack, activeTab = 'search', onNavigate }: Sea
       </ScrollView>
 
       {/* Bottom Navigation */}
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 

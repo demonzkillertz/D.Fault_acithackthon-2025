@@ -1,7 +1,11 @@
 import React, { useContext, useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, RefreshControl, Alert, Switch, Modal, TextInput } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, Image, RefreshControl, Alert, Switch, Modal } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AuthContext } from '@/context/AuthContext';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
+import { realtimeService } from '../../services/realtimeService';
+import { locationService } from '../../services/locationService';
+import api from '../../services/api';
 
 // Driver-specific interfaces
 interface DriverBus {
@@ -12,20 +16,13 @@ interface DriverBus {
   status: 'active' | 'maintenance' | 'retired';
   route_name?: string;
   company_name?: string;
-  current_location?: {
-    latitude: number;
-    longitude: number;
-    speed: number;
-    timestamp: string;
-  };
-}
-
-interface DriverAlert {
-  id: number;
-  type: 'route_change' | 'maintenance' | 'emergency' | 'general';
-  message: string;
-  timestamp: string;
-  is_read: boolean;
+  start_location?: string;
+  end_location?: string;
+  latitude?: number;
+  longitude?: number;
+  speed?: number;
+  heading?: number;
+  last_location_update?: string;
 }
 
 interface TripStatus {
@@ -36,70 +33,60 @@ interface TripStatus {
   eta?: string;
 }
 
+interface DriverAlert {
+  id: number;
+  type: 'route_change' | 'maintenance' | 'emergency' | 'general';
+  message: string;
+  timestamp: string;
+  is_read: boolean;
+}
+
 const DriverView = () => {
   const { user, logout } = useContext(AuthContext);
+  const insets = useSafeAreaInsets();
   const [assignedBus, setAssignedBus] = useState<DriverBus | null>(null);
-  const [alerts, setAlerts] = useState<DriverAlert[]>([]);
   const [tripStatus, setTripStatus] = useState<TripStatus>({
     is_active: false,
     passengers_count: 0
   });
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [locationSharing, setLocationSharing] = useState(false);
   const [showLocationModal, setShowLocationModal] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
-  const [locationSharing, setLocationSharing] = useState(true);
+  const [currentLocation, setCurrentLocation] = useState<any>(null);
+  const [isTracking, setIsTracking] = useState(false);
+  const [alerts, setAlerts] = useState<DriverAlert[]>([]);
 
   const loadDriverData = async () => {
     try {
-      // Simulate API calls for driver data
-      // In real implementation, these would be actual API calls
-      const mockBus: DriverBus = {
-        id: 1,
-        plate_number: 'BA-1-CHA-1234',
-        model: 'Tata Ultra AC',
-        capacity: 45,
-        status: 'active',
-        route_name: 'Kathmandu to Pokhara Express',
-        company_name: 'Siddhartha Transport Services',
-        current_location: {
-          latitude: 27.8567,
-          longitude: 84.8234,
-          speed: 65.5,
-          timestamp: new Date().toISOString()
+      const response = await api.get('/api/driver/bus');
+      if (response.data) {
+        setAssignedBus(response.data);
+        setTripStatus({
+          is_active: response.data.status === 'active',
+          current_route: response.data.route_name,
+          passengers_count: 0,
+          next_stop: 'Loading...',
+          eta: 'Calculating...'
+        });
+      }
+
+      // Load alerts (optional - may not exist yet)
+      try {
+        const alertsResponse = await api.get('/api/driver/alerts');
+        if (alertsResponse.data) {
+          setAlerts(alertsResponse.data);
         }
-      };
-
-      const mockAlerts: DriverAlert[] = [
-        {
-          id: 1,
-          type: 'route_change',
-          message: 'Route updated: New stop added at Mugling checkpoint',
-          timestamp: new Date().toISOString(),
-          is_read: false
-        },
-        {
-          id: 2,
-          type: 'maintenance',
-          message: 'Scheduled maintenance reminder: Service due in 3 days',
-          timestamp: new Date().toISOString(),
-          is_read: false
-        }
-      ];
-
-      const mockTripStatus: TripStatus = {
-        is_active: true,
-        current_route: 'Kathmandu to Pokhara Express',
-        passengers_count: 28,
-        next_stop: 'Mugling',
-        eta: '2:30 PM'
-      };
-
-      setAssignedBus(mockBus);
-      setAlerts(mockAlerts);
-      setTripStatus(mockTripStatus);
-    } catch (error) {
+      } catch (alertError) {
+        // Alerts endpoint may not exist yet, ignore error
+        console.log('Alerts endpoint not available yet');
+      }
+    } catch (error: any) {
       console.error('Error loading driver data:', error);
+      if (error.response?.status === 404) {
+        Alert.alert('No Bus Assigned', 'You dont have a bus assigned yet. Contact your company admin.');
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -110,30 +97,93 @@ const DriverView = () => {
     loadDriverData();
   }, [user?.id]);
 
+  useEffect(() => {
+    // Initialize location tracking if already enabled
+    if (locationSharing && assignedBus) {
+      startLocationTracking();
+    }
+    
+    return () => {
+      locationService.stopWatching();
+    };
+  }, [locationSharing, assignedBus]);
+
   const onRefresh = () => {
     setRefreshing(true);
     loadDriverData();
   };
 
-  const handleLogout = async () => {
-    Alert.alert(
-      'Confirm Logout',
-      'Are you sure you want to logout?',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        { 
-          text: 'Logout', 
-          onPress: async () => {
-            if (logout) {
-              await logout();
-            }
-          }
-        }
-      ]
+  const startLocationTracking = async () => {
+    if (!assignedBus) {
+      Alert.alert('Error', 'No bus assigned');
+      return;
+    }
+
+    const hasPermission = await locationService.requestPermissions();
+    if (!hasPermission) {
+      Alert.alert('Permission Required', 'Location permission is required for tracking');
+      setLocationSharing(false);
+      return;
+    }
+
+    setIsTracking(true);
+    
+    const started = await locationService.startWatching(
+      (location) => {
+        setCurrentLocation(location);
+        
+        // Share location via Socket.IO
+        realtimeService.shareLocation(
+          assignedBus.id,
+          location.coords.latitude,
+          location.coords.longitude,
+          location.coords.speed ? location.coords.speed * 3.6 : 0,
+          location.coords.heading || 0
+        );
+
+        // Also save to backend
+        api.post('/api/driver/location', {
+          busId: assignedBus.id,
+          latitude: location.coords.latitude,
+          longitude: location.coords.longitude,
+          speed: location.coords.speed ? location.coords.speed * 3.6 : 0,
+          heading: location.coords.heading || 0
+        }).catch(err => console.error('Error saving location:', err));
+      },
+      {
+        timeInterval: 5000,
+        distanceInterval: 10
+      }
     );
+
+    if (!started) {
+      Alert.alert('Error', 'Failed to start location tracking');
+      setLocationSharing(false);
+      setIsTracking(false);
+    }
+  };
+
+  const stopLocationTracking = () => {
+    locationService.stopWatching();
+    setIsTracking(false);
+    setCurrentLocation(null);
+  };
+
+  const handleLocationSharingToggle = (enabled: boolean) => {
+    setLocationSharing(enabled);
+    if (enabled) {
+      startLocationTracking();
+    } else {
+      stopLocationTracking();
+    }
   };
 
   const handleStartTrip = () => {
+    if (!assignedBus) {
+      Alert.alert('Error', 'No bus assigned');
+      return;
+    }
+
     Alert.alert(
       'Start Trip',
       'Are you ready to start your route?',
@@ -141,9 +191,19 @@ const DriverView = () => {
         { text: 'Cancel', style: 'cancel' },
         { 
           text: 'Start', 
-          onPress: () => {
-            setTripStatus(prev => ({ ...prev, is_active: true }));
-            Alert.alert('Success', 'Trip started successfully!');
+          onPress: async () => {
+            try {
+              await api.post('/api/driver/trip/start', {
+                busId: assignedBus.id
+              });
+              
+              setTripStatus(prev => ({ ...prev, is_active: true }));
+              setLocationSharing(true);
+              Alert.alert('Success', 'Trip started successfully!');
+            } catch (error) {
+              console.error('Error starting trip:', error);
+              Alert.alert('Error', 'Failed to start trip');
+            }
           }
         }
       ]
@@ -158,9 +218,19 @@ const DriverView = () => {
         { text: 'Cancel', style: 'cancel' },
         { 
           text: 'End Trip', 
-          onPress: () => {
-            setTripStatus(prev => ({ ...prev, is_active: false, passengers_count: 0 }));
-            Alert.alert('Success', 'Trip ended successfully!');
+          onPress: async () => {
+            try {
+              await api.post('/api/driver/trip/end', {
+                busId: assignedBus?.id
+              });
+              
+              setTripStatus(prev => ({ ...prev, is_active: false, passengers_count: 0 }));
+              setLocationSharing(false);
+              Alert.alert('Success', 'Trip ended successfully!');
+            } catch (error) {
+              console.error('Error ending trip:', error);
+              Alert.alert('Error', 'Failed to end trip');
+            }
           }
         }
       ]
@@ -168,6 +238,11 @@ const DriverView = () => {
   };
 
   const handleEmergency = () => {
+    if (!assignedBus) {
+      Alert.alert('Error', 'No bus assigned');
+      return;
+    }
+
     Alert.alert(
       'Emergency Alert',
       'This will send an emergency notification to your company and authorities.',
@@ -175,8 +250,22 @@ const DriverView = () => {
         { text: 'Cancel', style: 'cancel' },
         { 
           text: 'Send Alert', 
-          onPress: () => {
-            Alert.alert('Emergency Alert Sent', 'Help is on the way!');
+          onPress: async () => {
+            try {
+              await api.post('/api/driver/emergency', {
+                busId: assignedBus.id,
+                message: 'Emergency alert from driver',
+                type: 'emergency'
+              });
+              
+              // Also send via Socket.IO
+              realtimeService.sendEmergencyAlert(assignedBus.id, 'Emergency alert from driver');
+              
+              Alert.alert('Emergency Alert Sent', 'Help is on the way!');
+            } catch (error) {
+              console.error('Error sending emergency alert:', error);
+              Alert.alert('Error', 'Failed to send emergency alert');
+            }
           },
           style: 'destructive'
         }
@@ -184,8 +273,27 @@ const DriverView = () => {
     );
   };
 
+  const handleLogout = async () => {
+    Alert.alert(
+      'Confirm Logout',
+      'Are you sure you want to logout?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { 
+          text: 'Logout', 
+          onPress: async () => {
+            stopLocationTracking();
+            if (logout) {
+              await logout();
+            }
+          }
+        }
+      ]
+    );
+  };
+
   return (
-    <View style={styles.screen}>
+    <View style={[styles.screen, { paddingBottom: insets.bottom + 80 }]}>
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => setShowMenu(!showMenu)}>
@@ -218,10 +326,11 @@ const DriverView = () => {
 
       <ScrollView 
         style={styles.content}
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: 100 }]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }
+        showsVerticalScrollIndicator={false}
       >
         {/* Welcome Section */}
         <View style={styles.welcomeContainer}>
@@ -334,12 +443,38 @@ const DriverView = () => {
             </View>
             <Switch
               value={locationSharing}
-              onValueChange={setLocationSharing}
+              onValueChange={handleLocationSharingToggle}
               trackColor={{ false: '#767577', true: '#3498db' }}
               thumbColor={locationSharing ? '#fff' : '#f4f3f4'}
             />
           </View>
+          {isTracking && (
+            <View style={styles.trackingIndicator}>
+              <View style={styles.trackingDot} />
+              <Text style={styles.trackingText}>Real-time location sharing active</Text>
+            </View>
+          )}
         </View>
+
+        {/* Current Location Display */}
+        {currentLocation && (
+          <View style={styles.locationCard}>
+            <View style={styles.cardHeader}>
+              <Ionicons name="location" size={24} color="#27ae60" />
+              <Text style={styles.cardTitle}>Live Location</Text>
+            </View>
+            <View style={styles.locationDetails}>
+              <Text style={styles.locationText}>Latitude: {currentLocation.coords.latitude.toFixed(6)}</Text>
+              <Text style={styles.locationText}>Longitude: {currentLocation.coords.longitude.toFixed(6)}</Text>
+              <Text style={styles.locationText}>
+                Speed: {currentLocation.coords.speed ? (currentLocation.coords.speed * 3.6).toFixed(1) : '0'} km/h
+              </Text>
+              <Text style={styles.locationText}>
+                Last Updated: {new Date(currentLocation.timestamp).toLocaleString()}
+              </Text>
+            </View>
+          </View>
+        )}
 
         {/* Recent Alerts */}
         <View style={styles.alertsContainer}>
@@ -388,15 +523,22 @@ const DriverView = () => {
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Current Location</Text>
-            {assignedBus?.current_location && (
+            {currentLocation ? (
               <View style={styles.locationInfo}>
-                <Text style={styles.locationText}>Latitude: {assignedBus.current_location.latitude}</Text>
-                <Text style={styles.locationText}>Longitude: {assignedBus.current_location.longitude}</Text>
-                <Text style={styles.locationText}>Speed: {assignedBus.current_location.speed} km/h</Text>
+                <Text style={styles.locationText}>Latitude: {currentLocation.coords.latitude.toFixed(6)}</Text>
+                <Text style={styles.locationText}>Longitude: {currentLocation.coords.longitude.toFixed(6)}</Text>
                 <Text style={styles.locationText}>
-                  Last Updated: {new Date(assignedBus.current_location.timestamp).toLocaleString()}
+                  Speed: {currentLocation.coords.speed ? (currentLocation.coords.speed * 3.6).toFixed(1) : '0'} km/h
+                </Text>
+                <Text style={styles.locationText}>
+                  Accuracy: {currentLocation.coords.accuracy?.toFixed(1) || 'N/A'} meters
+                </Text>
+                <Text style={styles.locationText}>
+                  Last Updated: {new Date(currentLocation.timestamp).toLocaleString()}
                 </Text>
               </View>
+            ) : (
+              <Text style={styles.noDataText}>Location not available</Text>
             )}
             <TouchableOpacity 
               style={styles.modalCloseBtn} 
@@ -668,6 +810,39 @@ const styles = StyleSheet.create({
     marginLeft: 10,
     color: '#333',
   },
+  trackingIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 10,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#eee',
+  },
+  trackingDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#27ae60',
+    marginRight: 8,
+  },
+  trackingText: {
+    fontSize: 14,
+    color: '#27ae60',
+    fontWeight: '500',
+  },
+  locationCard: {
+    backgroundColor: '#fff',
+    margin: 15,
+    marginTop: 0,
+    padding: 20,
+    borderRadius: 10,
+    elevation: 2,
+  },
+  locationDetails: {
+    paddingTop: 15,
+    borderTopWidth: 1,
+    borderTopColor: '#eee',
+  },
   alertsContainer: {
     backgroundColor: '#fff',
     margin: 15,
@@ -761,8 +936,8 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   locationText: {
-    fontSize: 16,
-    marginBottom: 10,
+    fontSize: 14,
+    marginBottom: 8,
     color: '#333',
   },
   modalCloseBtn: {

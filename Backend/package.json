@@ -10,6 +10,7 @@
     "seed": "tsx src/scripts/seedData.ts"
   },
   "dependencies": {
+    "@types/socket.io": "^3.0.1",
     "bcryptjs": "^2.4.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
@@ -17,6 +18,8 @@
     "jsonwebtoken": "^9.0.2",
     "leaflet": "^1.9.4",
     "pg": "^8.11.3",
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.1",
     "swagger-ui-express": "^5.0.1",
     "yamljs": "^0.3.0"
   },

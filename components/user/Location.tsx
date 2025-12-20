@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, StatusBar, ScrollView } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { WebView } from 'react-native-webview';
 
@@ -189,6 +190,7 @@ interface LocationScreenProps {
 }
 
 export default function Location({ onBack, activeTab = 'location', onNavigate }: LocationScreenProps) {
+  const insets = useSafeAreaInsets();
   const [currentTime, setCurrentTime] = useState('');
   const [locationAccuracy, setLocationAccuracy] = useState('High');
 
@@ -242,7 +244,7 @@ export default function Location({ onBack, activeTab = 'location', onNavigate }:
   };
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { paddingBottom: insets.bottom + 80 }]}>
       <StatusBar barStyle="dark-content" backgroundColor="#fff" />
       
       {/* Status Bar */}
@@ -318,7 +320,11 @@ export default function Location({ onBack, activeTab = 'location', onNavigate }:
 
       {/* Location Details */}
       <View style={styles.locationDetails}>
-        <ScrollView style={styles.detailsScroll} showsVerticalScrollIndicator={false}>
+        <ScrollView 
+          style={styles.detailsScroll} 
+          contentContainerStyle={{ paddingBottom: 100 }}
+          showsVerticalScrollIndicator={false}
+        >
           {/* Current Location Info */}
           <View style={styles.currentLocationCard}>
             <View style={styles.locationCardHeader}>

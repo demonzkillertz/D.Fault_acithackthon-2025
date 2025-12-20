@@ -1,19 +1,33 @@
 import { Router } from 'express';
+import { authenticateToken } from '../middleware/authMiddleware';
+import {
+  getDriverBus,
+  startTrip,
+  endTrip,
+  updateLocation,
+  getPassengerWaitlist,
+  sendEmergencyAlert
+} from '../controllers/driverController';
+
 const router = Router();
 
-// POST /api/driver/track
-router.post('/track', (req, res) => {
-  res.send('Driver tracking started/stopped');
-});
+// All driver routes require authentication
+router.use(authenticateToken);
 
-// POST /api/driver/route
-router.post('/route', (req, res) => {
-  res.send('Route confirmed/fixed');
-});
+// Get driver's assigned bus
+router.get('/bus', getDriverBus);
 
-// GET /api/driver/passengers
-router.get('/passengers', (req, res) => {
-  res.send('List of waiting passengers');
-});
+// Trip management
+router.post('/trip/start', startTrip);
+router.post('/trip/end', endTrip);
+
+// Location tracking
+router.post('/location', updateLocation);
+
+// Get passengers waiting for this driver's bus
+router.get('/passengers', getPassengerWaitlist);
+
+// Emergency alert
+router.post('/emergency', sendEmergencyAlert);
 
 export default router;

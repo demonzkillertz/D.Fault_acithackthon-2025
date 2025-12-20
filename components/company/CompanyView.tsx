@@ -1,13 +1,30 @@
 import React, { useContext, useState, useEffect } from 'react';
 import { View, Text, StyleSheet, Image, ScrollView, TouchableOpacity, Alert, RefreshControl, Modal, TextInput } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { AuthContext } from '@/context/AuthContext';
 import { Ionicons, MaterialIcons } from '@expo/vector-icons';
 import { companyService, Bus, Company } from '../../services/companyService';
+import { realtimeService } from '../../services/realtimeService';
+import api from '../../services/api';
+
+interface LiveBusData {
+  id: number;
+  plate_number: string;
+  latitude: number;
+  longitude: number;
+  speed: number;
+  heading: number;
+  last_update: string;
+  driver_name?: string;
+  is_active: boolean;
+}
 
 const CompanyView = () => {
   const { user, logout } = useContext(AuthContext);
+  const insets = useSafeAreaInsets();
   const [buses, setBuses] = useState<Bus[]>([]);
   const [company, setCompany] = useState<Company | null>(null);
+  const [liveBuses, setLiveBuses] = useState<LiveBusData[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [showAddBusModal, setShowAddBusModal] = useState(false);
@@ -27,6 +44,20 @@ const CompanyView = () => {
         ]);
         setBuses(busesData);
         setCompany(companyData);
+
+        // Load live bus locations
+        try {
+          const liveResponse = await api.get(`/api/locations/company/${user.id}/buses`);
+          if (liveResponse.data) {
+            setLiveBuses(liveResponse.data.map((bus: any) => ({
+              ...bus,
+              is_active: true,
+              last_update: bus.timestamp || new Date().toISOString()
+            })));
+          }
+        } catch (liveError) {
+          console.log('No live bus data available');
+        }
       }
     } catch (error) {
       console.error('Error loading company data:', error);
@@ -36,6 +67,53 @@ const CompanyView = () => {
       setRefreshing(false);
     }
   };
+
+  // Real-time bus updates
+  useEffect(() => {
+    const handleBusLocationUpdate = (data: any) => {
+      const { busId, latitude, longitude, speed, heading } = data;
+      
+      setLiveBuses(prevBuses => {
+        const existingBusIndex = prevBuses.findIndex(bus => bus.id === busId);
+        const updatedBus = {
+          id: busId,
+          plate_number: buses.find(b => b.id === busId)?.plate_number || `Bus-${busId}`,
+          latitude,
+          longitude,
+          speed,
+          heading,
+          last_update: new Date().toISOString(),
+          is_active: true
+        };
+
+        if (existingBusIndex >= 0) {
+          const newBuses = [...prevBuses];
+          newBuses[existingBusIndex] = updatedBus;
+          return newBuses;
+        } else {
+          return [...prevBuses, updatedBus];
+        }
+      });
+    };
+
+    const handleEmergencyAlert = (data: any) => {
+      Alert.alert(
+        'Emergency Alert',
+        `Bus ${data.busId}: ${data.message}`,
+        [
+          { text: 'OK' },
+          { text: 'Contact Driver', onPress: () => console.log('Contact driver') }
+        ]
+      );
+    };
+
+    // Subscribe to real-time events
+    realtimeService.onEmergencyAlert(handleEmergencyAlert);
+
+    return () => {
+      realtimeService.offEmergencyAlert(handleEmergencyAlert);
+    };
+  }, [buses]);
 
   useEffect(() => {
     loadCompanyData();
@@ -79,7 +157,7 @@ const CompanyView = () => {
   const totalBuses = buses.length;
 
   return (
-    <View style={styles.screen}>
+    <View style={[styles.screen, { paddingBottom: insets.bottom + 80 }]}>
       {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => setShowMenu(!showMenu)}>
@@ -126,10 +204,61 @@ const CompanyView = () => {
           <Text style={styles.statLabel}>Rating</Text>
         </View>
       </View>
+
+      {/* Live Fleet Status */}
+      <View style={styles.liveFleetContainer}>
+        <View style={styles.liveFleetHeader}>
+          <View style={styles.headerInfo}>
+            <Ionicons name="pulse" size={24} color="#27ae60" />
+            <Text style={styles.liveFleetTitle}>Live Fleet Status</Text>
+          </View>
+          <View style={styles.liveIndicator}>
+            <View style={[styles.liveDot, { opacity: liveBuses.length > 0 ? 1 : 0.3 }]} />
+            <Text style={styles.liveText}>{liveBuses.length} Active</Text>
+          </View>
+        </View>
+        
+        {liveBuses.length === 0 ? (
+          <View style={styles.noLiveFleetContainer}>
+            <Text style={styles.noDataText}>No active buses</Text>
+            <Text style={styles.noDataSubtext}>Buses will appear here when drivers start trips</Text>
+          </View>
+        ) : (
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.liveFleetScroll}>
+            {liveBuses.map((bus) => (
+              <View key={bus.id} style={styles.liveBusCard}>
+                <View style={styles.liveBusHeader}>
+                  <Text style={styles.liveBusPlate}>{bus.plate_number}</Text>
+                  <View style={[styles.statusDot, { 
+                    backgroundColor: bus.is_active ? '#27ae60' : '#e74c3c' 
+                  }]} />
+                </View>
+                <View style={styles.liveBusStats}>
+                  <View style={styles.liveStatItem}>
+                    <Text style={styles.liveStatValue}>{bus.speed.toFixed(0)}</Text>
+                    <Text style={styles.liveStatLabel}>km/h</Text>
+                  </View>
+                  <View style={styles.liveStatItem}>
+                    <Text style={styles.liveStatValue}>{bus.heading.toFixed(0)}°</Text>
+                    <Text style={styles.liveStatLabel}>heading</Text>
+                  </View>
+                </View>
+                <Text style={styles.lastUpdateText}>
+                  {new Date(bus.last_update).toLocaleTimeString()}
+                </Text>
+                {bus.driver_name && (
+                  <Text style={styles.driverNameText}>{bus.driver_name}</Text>
+                )}
+              </View>
+            ))}
+          </ScrollView>
+        )}
+      </View>
+
       {/* Buses Header */}
       <View style={styles.driversHeader}>
         <Ionicons name="bus-outline" size={24} color="black" />
-        <Text style={styles.driversTitle}>Fleet Management</Text>
+        <Text style={styles.driversTitle}>Bus Management</Text>
         <TouchableOpacity 
           style={styles.addBtn}
           onPress={() => setShowAddBusModal(true)}
@@ -140,10 +269,11 @@ const CompanyView = () => {
       </View>
       {/* Buses Cards */}
       <ScrollView 
-        contentContainerStyle={styles.cardsContainer}
+        contentContainerStyle={[styles.cardsContainer, { paddingBottom: 100 }]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }
+        showsVerticalScrollIndicator={false}
       >
         {loading ? (
           <Text style={styles.loadingText}>Loading buses...</Text>
@@ -498,6 +628,117 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#334155',
     fontWeight: '500',
+  },
+  // Live Fleet Styles
+  liveFleetContainer: {
+    backgroundColor: '#fff',
+    marginBottom: 15,
+    padding: 15,
+    elevation: 2,
+    borderRadius: 10,
+  },
+  liveFleetHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 15,
+  },
+  headerInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  liveFleetTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginLeft: 10,
+    color: '#333',
+  },
+  liveIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  liveDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#27ae60',
+    marginRight: 6,
+  },
+  liveText: {
+    fontSize: 14,
+    color: '#27ae60',
+    fontWeight: '500',
+  },
+  noLiveFleetContainer: {
+    alignItems: 'center',
+    paddingVertical: 20,
+  },
+  noDataText: {
+    fontSize: 16,
+    color: '#666',
+    textAlign: 'center',
+  },
+  noDataSubtext: {
+    fontSize: 12,
+    color: '#999',
+    textAlign: 'center',
+    marginTop: 5,
+  },
+  liveFleetScroll: {
+    marginHorizontal: -5,
+  },
+  liveBusCard: {
+    backgroundColor: '#f8f9fa',
+    padding: 15,
+    borderRadius: 8,
+    marginHorizontal: 5,
+    minWidth: 140,
+    borderLeftWidth: 3,
+    borderLeftColor: '#27ae60',
+  },
+  liveBusHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  liveBusPlate: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#2c3e50',
+  },
+  statusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  liveBusStats: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 8,
+  },
+  liveStatItem: {
+    alignItems: 'center',
+  },
+  liveStatValue: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#3498db',
+  },
+  liveStatLabel: {
+    fontSize: 10,
+    color: '#666',
+  },
+  lastUpdateText: {
+    fontSize: 10,
+    color: '#999',
+    textAlign: 'center',
+  },
+  driverNameText: {
+    fontSize: 11,
+    color: '#666',
+    textAlign: 'center',
+    marginTop: 4,
   },
 });
 

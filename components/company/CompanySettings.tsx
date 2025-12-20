@@ -390,15 +390,15 @@ const CompanySettings = () => {
               </View>
               <View style={styles.companyDetails}>
                 <Text style={styles.companyName}>Siddhartha Transport Services</Text>
-                <Text style={styles.companySubtitle}>Fleet Management Dashboard</Text>
+                <Text style={styles.companySubtitle}>Bus Management Dashboard</Text>
                 <Text style={styles.companyStats}>6 Active Buses • 15 Routes • 45 Drivers</Text>
               </View>
             </View>
           </View>
 
-          {/* Fleet Management Settings */}
+          {/* Bus Management Settings */}
           <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Fleet Management</Text>
+            <Text style={styles.sectionTitle}>Bus Management</Text>
             
             <View style={styles.settingItem}>
               <View style={styles.settingInfo}>

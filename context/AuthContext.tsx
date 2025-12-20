@@ -2,6 +2,7 @@ import React, { createContext, useState, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
 import { Alert } from 'react-native';
+import { realtimeService } from '../services/realtimeService';
 
 
 // Use Expo's process.env for web and native, fallback to global for Metro
@@ -23,8 +24,12 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       const storedUser = await AsyncStorage.getItem('user');
       const storedToken = await AsyncStorage.getItem('token');
       if (storedUser && storedToken) {
-        setUser(JSON.parse(storedUser));
+        const userData = JSON.parse(storedUser);
+        setUser(userData);
         setToken(storedToken);
+        
+        // Connect to real-time service if user exists
+        realtimeService.connect(userData.id, userData.role);
       }
     })();
   }, []);
@@ -37,6 +42,10 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
       setToken(res.data.token);
       await AsyncStorage.setItem('user', JSON.stringify(res.data.user));
       await AsyncStorage.setItem('token', res.data.token);
+      
+      // Connect to real-time service
+      realtimeService.connect(res.data.user.id, res.data.user.role);
+      
       return { success: true };
     } catch (err: any) {
       console.log('Login error:', err.response?.data || err.message);
@@ -55,6 +64,9 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
   const logout = async () => {
     try {
+      // Disconnect from real-time service first
+      realtimeService.disconnect();
+      
       // Call backend logout endpoint
       await axios.post(`${API_URL}/api/auth/logout`, {}, {
         headers: { Authorization: `Bearer ${token}` }
